@@ -25,6 +25,7 @@ jobs:
       pr_sha: ${{ steps.pr-info.outputs.sha }}
       pr_repo: ${{ steps.pr-info.outputs.repo }}
       pr_number: ${{ steps.pr-info.outputs.number }}
+      deployment_id: ${{ steps.create-deployment.outputs.deployment_id }}
     steps:
       - name: Check if commenter has write access
         id: check-permission
@@ -58,18 +59,8 @@ jobs:
             console.log(`PR #${context.issue.number} head SHA: ${pr.data.head.sha}`);
             console.log(`PR head repo: ${pr.data.head.repo.full_name}`);
 
-  ui-e2e-tests:
-    needs: check-trigger
-    if: >
-      always() &&
-      (github.repository == 'kaiokmo/eda-server' && github.event_name == 'workflow_dispatch') ||
-      (needs.check-trigger.result == 'success')
-    runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
-    steps:
       - name: Create deployment
         id: create-deployment
-        if: github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
@@ -77,11 +68,11 @@ jobs:
               const deployment = await github.rest.repos.createDeployment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: 'refs/pull/${{ needs.check-trigger.outputs.pr_number }}/head',
-                environment: 'protected',
+                ref: 'refs/pull/${{ steps.pr-info.outputs.number }}/head',
+                environment: 'ui-e2e-tests',
                 auto_merge: false,
                 required_contexts: [],
-                description: 'UI E2E Tests for PR #${{ needs.check-trigger.outputs.pr_number }}'
+                description: 'UI E2E Tests for PR #${{ steps.pr-info.outputs.number }} @ ${{ steps.pr-info.outputs.sha }}'
               });
               
               if (deployment.data && deployment.data.id) {
@@ -91,9 +82,11 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   deployment_id: deployment.data.id,
-                  state: 'in_progress',
+                  state: 'pending',
+                  description: 'Waiting for approval',
                   log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
                 });
+                console.log(`Created deployment ${deployment.data.id}`);
               } else {
                 core.warning('Deployment was not created - response had no ID');
                 core.setOutput('deployment_id', '');
@@ -102,6 +95,29 @@ jobs:
               core.warning(`Failed to create deployment: ${error.message}`);
               core.setOutput('deployment_id', '');
             }
+
+  ui-e2e-tests:
+    needs: check-trigger
+    if: >
+      always() &&
+      (github.repository == 'kaiokmo/eda-server' && github.event_name == 'workflow_dispatch') ||
+      (needs.check-trigger.result == 'success')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
+    steps:
+      - name: Update deployment to in_progress
+        if: github.event_name == 'issue_comment' && needs.check-trigger.outputs.deployment_id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ needs.check-trigger.outputs.deployment_id }}',
+              state: 'in_progress',
+              description: 'Running UI E2E tests',
+              log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -143,7 +159,7 @@ jobs:
           ./node_modules/.bin/cypress run --config-file=cypress.eda.config.ts --headless
 
       - name: Update deployment status
-        if: always() && github.event_name == 'issue_comment' && steps.create-deployment.outputs.deployment_id != ''
+        if: always() && github.event_name == 'issue_comment' && needs.check-trigger.outputs.deployment_id != ''
         uses: actions/github-script@v7
         with:
           script: |
@@ -151,7 +167,7 @@ jobs:
             await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              deployment_id: '${{ steps.create-deployment.outputs.deployment_id }}',
+              deployment_id: '${{ needs.check-trigger.outputs.deployment_id }}',
               state: state,
               log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });
