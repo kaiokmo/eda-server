@@ -74,6 +74,42 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
     steps:
+      - name: Create deployment
+        id: create-deployment
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const deployment = await github.rest.repos.createDeployment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: '${{ needs.check-trigger.outputs.pr_sha }}',
+                environment: 'protected',
+                auto_merge: false,
+                required_contexts: [],
+                description: 'API E2E Tests for PR #${{ needs.check-trigger.outputs.pr_number }}'
+              });
+              
+              if (deployment.data && deployment.data.id) {
+                core.setOutput('deployment_id', deployment.data.id);
+                
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.data.id,
+                  state: 'in_progress',
+                  log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                });
+              } else {
+                core.warning('Deployment was not created - response had no ID');
+                core.setOutput('deployment_id', '');
+              }
+            } catch (error) {
+              core.warning(`Failed to create deployment: ${error.message}`);
+              core.setOutput('deployment_id', '');
+            }
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -158,6 +194,20 @@ jobs:
         run: |
           docker compose -p eda -f docker-compose-dev.yaml logs
 
+      - name: Update deployment status
+        if: always() && github.event_name == 'issue_comment' && steps.create-deployment.outputs.deployment_id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.create-deployment.outputs.deployment_id }}',
+              state: state,
+              log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
+
   api-e2e-multinode-tests:
     needs: check-trigger
     if: >
@@ -167,6 +217,42 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
     steps:
+      - name: Create deployment
+        id: create-deployment
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const deployment = await github.rest.repos.createDeployment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: '${{ needs.check-trigger.outputs.pr_sha }}',
+                environment: 'protected',
+                auto_merge: false,
+                required_contexts: [],
+                description: 'API E2E Multinode Tests for PR #${{ needs.check-trigger.outputs.pr_number }}'
+              });
+              
+              if (deployment.data && deployment.data.id) {
+                core.setOutput('deployment_id', deployment.data.id);
+                
+                await github.rest.repos.createDeploymentStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  deployment_id: deployment.data.id,
+                  state: 'in_progress',
+                  log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                });
+              } else {
+                core.warning('Deployment was not created - response had no ID');
+                core.setOutput('deployment_id', '');
+              }
+            } catch (error) {
+              core.warning(`Failed to create deployment: ${error.message}`);
+              core.setOutput('deployment_id', '');
+            }
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -233,3 +319,17 @@ jobs:
           component_name=eda
           git_commit_sha=${{ env.GIT_SHA }}
           git_repository_url="https://github.com/${{ github.repository }}"
+
+      - name: Update deployment status
+        if: always() && github.event_name == 'issue_comment' && steps.create-deployment.outputs.deployment_id != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: '${{ steps.create-deployment.outputs.deployment_id }}',
+              state: state,
+              log_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
