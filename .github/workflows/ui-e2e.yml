@@ -77,7 +77,7 @@ jobs:
               const deployment = await github.rest.repos.createDeployment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: '${{ needs.check-trigger.outputs.pr_sha }}',
+                ref: 'refs/pull/${{ needs.check-trigger.outputs.pr_number }}/head',
                 environment: 'protected',
                 auto_merge: false,
                 required_contexts: [],
