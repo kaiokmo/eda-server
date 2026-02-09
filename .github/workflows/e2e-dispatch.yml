@@ -11,10 +11,8 @@ on:
         description: 'filter for pytest to be used after "-k" flag, default is empty'
         required: false
         default: ''
-  pull_request_target:
-    types:
-      - labeled
-      - synchronize
+  issue_comment:
+    types: [created]
 
 env:
   EDA_QA_PATH: "./eda-qa"
@@ -23,22 +21,64 @@ env:
   PYTEST_RETRIES: 2
 
 jobs:
-  api-e2e-tests:
+  check-trigger:
     if: >
-      (github.repository == 'ansible/eda-server' && github.event_name == 'workflow_dispatch') ||
-      (github.repository == 'ansible/eda-server' && github.event_name == 'pull_request_target' &&
-        contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+      github.repository == 'kaiokmo/eda-server' &&
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/run-e2e'
     runs-on: ubuntu-latest
+    outputs:
+      pr_sha: ${{ steps.pr-info.outputs.sha }}
+      pr_repo: ${{ steps.pr-info.outputs.repo }}
+      pr_number: ${{ steps.pr-info.outputs.number }}
+    steps:
+      - name: Check if commenter has write access
+        id: check-permission
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.payload.comment.user.login
+            });
+            const allowed = ['admin', 'write'].includes(permission.permission);
+            if (!allowed) {
+              core.setFailed(`User ${context.payload.comment.user.login} does not have write access`);
+            }
+            console.log(`User ${context.payload.comment.user.login} has ${permission.permission} permission`);
+
+      - name: Get PR info
+        id: pr-info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('sha', pr.data.head.sha);
+            core.setOutput('repo', pr.data.head.repo.full_name);
+            core.setOutput('number', context.issue.number);
+            console.log(`PR #${context.issue.number} head SHA: ${pr.data.head.sha}`);
+            console.log(`PR head repo: ${pr.data.head.repo.full_name}`);
+
+  api-e2e-tests:
+    needs: check-trigger
+    if: >
+      always() &&
+      (github.repository == 'kaiokmo/eda-server' && github.event_name == 'workflow_dispatch') ||
+      (needs.check-trigger.result == 'success')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: >-
-            ${{
-              github.event_name == 'pull_request_target' && github.event.pull_request.head.ref
-              || github.sha
-            }}
+          repository: ${{ github.event_name == 'issue_comment' && needs.check-trigger.outputs.pr_repo || github.repository }}
+          ref: ${{ github.event_name == 'issue_comment' && needs.check-trigger.outputs.pr_sha || github.sha }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
@@ -119,21 +159,19 @@ jobs:
           docker compose -p eda -f docker-compose-dev.yaml logs
 
   api-e2e-multinode-tests:
+    needs: check-trigger
     if: >
-      (github.repository == 'ansible/eda-server' && github.event_name == 'workflow_dispatch') ||
-      (github.repository == 'ansible/eda-server' && github.event_name == 'pull_request_target' &&
-        contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+      always() &&
+      (github.repository == 'kaiokmo/eda-server' && github.event_name == 'workflow_dispatch') ||
+      (needs.check-trigger.result == 'success')
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'issue_comment' && 'protected' || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          repository: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: >-
-            ${{
-              github.event_name == 'pull_request_target' && github.event.pull_request.head.ref
-              || github.sha
-            }}
+          repository: ${{ github.event_name == 'issue_comment' && needs.check-trigger.outputs.pr_repo || github.repository }}
+          ref: ${{ github.event_name == 'issue_comment' && needs.check-trigger.outputs.pr_sha || github.sha }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@v3
